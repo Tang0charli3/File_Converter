@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import pdfplumber
 import pandas as pd
 from tempfile import NamedTemporaryFile
@@ -6,10 +8,13 @@ import docx
 from openpyxl.reader.excel import load_workbook
 from openpyxl.workbook import Workbook
 from pptx import Presentation
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, landscape, A4, portrait
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfgen import canvas
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from docx import Document
+from docx.oxml import OxmlElement
 
 
 def pdf_to_excel(pdf_path):
@@ -142,3 +147,150 @@ def excel_to_pdf(excel_path, pdf_path):
         print("No valid data found in the Excel file to create a PDF.")
 
     return pdf_path
+
+def set_cell_border(cell, **kwargs):
+    tc = cell._element
+    for key, value in kwargs.items():
+        tc.get_or_add_tcPr().append(OxmlElement(key))
+        element = tc.tcPr[-1]
+        element.append(OxmlElement(value))
+
+
+def excel_to_docx(excel_path, docx_path):
+    """
+    Convert an Excel workbook to a DOCX document with tables.
+    """
+    # Load Excel workbook
+    workbook = load_workbook(excel_path, data_only=True)
+    sheet_names = workbook.sheetnames
+
+    # Create a new Document object
+    doc = Document()
+
+    for sheet_name in sheet_names:
+        # Add sheet name as heading
+        doc.add_heading(sheet_name, level=1)
+
+        # Create a table for the current sheet
+        sheet = workbook[sheet_name]
+        table = doc.add_table(rows=sheet.max_row, cols=sheet.max_column)
+
+        # Set table style
+        table.style = 'Table Grid'
+
+        # Iterate through each cell in the sheet
+        for row in sheet.iter_rows():
+            for cell in row:
+                table_cell = table.cell(cell.row - 1, cell.column - 1)
+                value = str(cell.value) if cell.value is not None else ''
+                table_cell.text = value
+
+    # Save the document
+    doc.save(docx_path)
+    print(f"DOCX created: {docx_path}")
+
+    return docx_path
+
+
+def docx_to_pdf(docx_path, pdf_path, orientation):
+    # Load DOCX file
+    doc = Document(docx_path)
+
+    # Determine page size based on orientation
+    if orientation == 'landscape':
+        pagesize = landscape(A4)
+    else:
+        pagesize = portrait(A4)
+
+    # Create a BytesIO buffer for the PDF
+    buffer = BytesIO()
+
+    # Create a canvas with specified page size
+    c = canvas.Canvas(buffer, pagesize=pagesize)
+
+    # Set margins
+    left_margin = 50
+    right_margin = 50
+    top_margin = 50
+    bottom_margin = 50
+
+    # Calculate usable width and height considering margins
+    usable_width = pagesize[0] - left_margin - right_margin
+    usable_height = pagesize[1] - top_margin - bottom_margin
+
+    # Styles
+    styles = getSampleStyleSheet()
+    normal_style = styles["Normal"]
+    heading_style = styles["Heading1"]
+
+    try:
+        # Iterate through paragraphs and tables in DOCX
+        y_position = pagesize[1] - top_margin
+        for para in doc.paragraphs:
+            # Draw each paragraph
+            ptext = para.text
+            p = Paragraph(ptext, normal_style)
+            p.wrapOn(c, usable_width, 20)
+
+            # Check if adding this paragraph will exceed the page height
+            if y_position - p.height < bottom_margin:
+                c.showPage()  # Start a new page
+                c.setFont("Helvetica", 12)
+                y_position = pagesize[1] - top_margin
+
+            p.drawOn(c, left_margin, y_position - p.height)
+
+            # Adjust Y position
+            y_position -= p.height + 10  # Adding some space between paragraphs
+
+        # Draw tables
+        for table in doc.tables:
+            # Assuming 1st row is header and rest are data
+            data = []
+            for i, row in enumerate(table.rows):
+                if i == 0:
+                    continue  # skip header row
+                data.append([cell.text for cell in row.cells])
+
+            # Convert table data to PDF table
+            pdf_table = Table(data, repeatRows=1)
+
+            # Style the table
+            pdf_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.gray),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.black),
+                ('BOX', (0, 0), (-1, -1), 0.25, colors.black),
+            ]))
+
+            # Measure table height
+            table_height = pdf_table.wrap(usable_width, 0)[1]
+
+            # Check if adding this table will exceed the page height
+            if y_position - table_height < bottom_margin:
+                c.showPage()  # Start a new page
+                c.setFont("Helvetica", 12)
+                y_position = pagesize[1] - top_margin
+
+            # Draw the table
+            pdf_table.drawOn(c, left_margin, y_position - table_height)
+
+            # Adjust Y position after drawing table
+            y_position -= table_height + 20  # Adding some space between tables
+
+        # Save the canvas content into the BytesIO buffer
+        c.showPage()
+        c.save()
+
+        # Write the PDF buffer to a file
+        with open(pdf_path, 'wb') as f:
+            f.write(buffer.getvalue())
+
+        print(f"PDF created: {pdf_path}")
+        return pdf_path
+
+    except Exception as e:
+        print(f"Error during PDF creation: {e}")
+        return None

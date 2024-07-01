@@ -5,7 +5,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from .serializers import FileUploadSerializer
-from .utils import pdf_to_excel, docx_to_excel, ppt_to_excel, excel_to_pdf
+from .utils import pdf_to_excel, docx_to_excel, ppt_to_excel, excel_to_pdf, excel_to_docx, docx_to_pdf
+
 
 class FileUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
@@ -15,6 +16,7 @@ class FileUploadView(APIView):
         if file_serializer.is_valid():
             uploaded_file = request.FILES['file']
             file_type = request.data.get('file_type')
+            orentation = request.data.get('orentation')
 
             # Save the uploaded file in a temporary directory with its original name
             temp_dir = tempfile.gettempdir()
@@ -40,6 +42,12 @@ class FileUploadView(APIView):
                     content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 case 'excel to pdf':
                     output_file = excel_to_pdf(save_path, os.path.splitext(save_path)[0] + '.pdf')
+                    content_type = 'application/pdf'
+                case 'excel to docx':
+                    output_file = excel_to_docx(save_path, os.path.splitext(save_path)[0] + '.docx')
+                    content_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                case 'docs to pdf':
+                    output_file = docx_to_pdf(save_path, os.path.splitext(save_path)[0]+'.pdf', orentation)
                     content_type = 'application/pdf'
                 case _:
                     return Response({"error": "Unsupported file type."}, status=400)
